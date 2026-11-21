@@ -1,0 +1,15 @@
+# Godot editor/import cache (.import files are committed: they hold settings)
+.godot/
+
+# Exported web builds (regenerate with the export presets)
+build/
+
+# Local tool/agent state
+.freebuff/
+.cloud-attachments/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+*.tmp
+*.log

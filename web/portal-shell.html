@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101820">
+  <title>$GODOT_PROJECT_NAME</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #101820; }
+    body { display: flex; align-items: center; justify-content: center; }
+    #game-frame { position: relative; width: min(100vw, 177.7778vh); max-height: 100vh; aspect-ratio: 16 / 9; overflow: hidden; background: #101820; }
+    #canvas { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+    /* The first frame a portal player sees is this gate, not the title screen.
+       It carries the same wordmark, gold and felt language as the game. */
+    #status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; color: #f4ead5; text-align: center; background: radial-gradient(circle at 50% 32%, rgba(44, 96, 78, 0.55), rgba(11, 20, 24, 0.98) 62%), #101820; font-family: "Arial Narrow", "Helvetica Neue", Arial, sans-serif; }
+    #status:empty { display: none; }
+    #gate { width: min(100%, 560px); }
+    #gate .kicker { margin: 0 0 10px; color: #f2bd58; font: 700 11px/1 sans-serif; letter-spacing: 0.3em; }
+    #gate h1 { margin: 0; color: #f2bd58; font: 900 clamp(36px, 7vw, 66px)/0.98 "Arial Black", Impact, "Arial Narrow", sans-serif; letter-spacing: 0.01em; white-space: nowrap; text-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
+    #gate .tagline { margin: 16px auto 0; max-width: 420px; color: #cfe0dc; font: 400 clamp(13px, 2.6vw, 16px)/1.55 sans-serif; }
+    #gate .rule { width: 76px; height: 3px; margin: 18px auto 0; background: #f2bd58; }
+    button#start-game { margin-top: 24px; border: 0; border-radius: 7px; padding: 16px 36px; color: #091116; background: #f2bd58; box-shadow: 0 5px 0 #a87a2a; font: 700 18px/1 "Arial Narrow", Arial, sans-serif; letter-spacing: 0.12em; cursor: pointer; transition: transform 90ms ease, box-shadow 90ms ease, background 90ms ease; }
+    button#start-game:hover { background: #ffd275; }
+    button#start-game:active { transform: translateY(3px); box-shadow: 0 2px 0 #a87a2a; }
+    button#start-game:disabled { opacity: 0.65; cursor: default; }
+    #gate .hint { margin: 18px 0 0; color: #7f979c; font: 400 11px/1.4 sans-serif; letter-spacing: 0.06em; }
+    #progress { margin: 16px auto 0; color: #8fe1bd; font: 700 11px/1.4 sans-serif; letter-spacing: 0.14em; min-height: 16px; }
+    #status .load-error { color: #ef6b64; font: 600 14px/1.5 sans-serif; }
+    #status .load-error button { margin-top: 16px; border: 0; border-radius: 7px; padding: 12px 24px; color: #091116; background: #f2bd58; font: 700 14px sans-serif; cursor: pointer; }
+    /* A 16:9 table is unreadable on a portrait phone. Prompt a rotation after
+       the game starts; the overlay disappears by itself when the phone turns. */
+    #rotate { display: none; position: fixed; inset: 0; z-index: 10; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); background: #101820; color: #f4ead5; text-align: center; font: 700 20px/1.3 sans-serif; letter-spacing: 0.04em; }
+    #rotate span { display: block; width: 44px; height: 70px; border: 3px solid #f2bd58; border-radius: 7px; position: relative; }
+    #rotate span::after { content: ""; position: absolute; left: 50%; bottom: 6px; width: 5px; height: 5px; border-radius: 50%; background: #f2bd58; transform: translateX(-50%); }
+    #rotate small { max-width: 260px; color: #8ca5ad; font: 400 13px/1.5 sans-serif; letter-spacing: 0; }
+    @media (orientation: portrait) and (max-width: 820px) {
+      body.playing #rotate { display: flex; }
+    }
+  </style>
+  $GODOT_HEAD_INCLUDE
+  <script>
+    (function () {
+      "use strict";
+      function safely(promise) {
+        return Promise.resolve(promise).then(function () { return true; }).catch(function () { return false; });
+      }
+      function hostMatches(name) {
+        if (window.__rackPortalTarget) return window.__rackPortalTarget === name;
+        return (location.hostname + " " + document.referrer).toLowerCase().indexOf(name) !== -1;
+      }
+      function loadSdk(src, globalName, init) {
+        return new Promise(function (resolve) {
+          function start() {
+            if (!window[globalName]) { resolve(false); return; }
+            safely(init(window[globalName])).then(resolve);
+          }
+          if (window[globalName]) { start(); return; }
+          var script = document.createElement("script");
+          script.src = src;
+          script.onload = start;
+          script.onerror = function () { resolve(false); };
+          document.head.appendChild(script);
+        });
+      }
+      // Copy support for the run-result button. The synchronous textarea path
+      // works inside a portal iframe on a click where the async Clipboard API
+      // can be blocked; returns false so the game can say so instead of lying.
+      window.__rackCopy = function (text) {
+        try {
+          var area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.left = "-1000px";
+          area.style.top = "0";
+          document.body.appendChild(area);
+          area.focus();
+          area.select();
+          var ok = document.execCommand("copy");
+          document.body.removeChild(area);
+          // The textarea stole focus from the game canvas; without this the
+          // keyboard would go dead until the player clicked again.
+          var canvas = document.getElementById("canvas");
+          if (canvas) canvas.focus();
+          return ok;
+        } catch (error) { return false; }
+      };
+      window.__rackPortalMuted = false;
+      var pokiHost = hostMatches("poki");
+      var crazyHost = hostMatches("crazygames");
+      var coolmathHost = hostMatches("coolmathgames") || hostMatches("coolmath");
+      var explicitTarget = window.__rackPortalTarget;
+      window.__rackPortalTarget = explicitTarget || (pokiHost ? "poki" : (crazyHost ? "crazygames" : (coolmathHost ? "coolmath" : "local")));
+      // Local QA runs must not initialize a live portal SDK: the preset still
+      // names its target, but a developer server is not a portal session. This
+      // keeps phantom measures/events out of Poki's dashboard and keeps local
+      // console noise out of browser tests. Real preview wrappers are the only
+      // place SDK behavior can be verified anyway.
+      var localQa = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+      var selectedSdk = window.__rackPortalTarget === "poki" ? "poki" : (window.__rackPortalTarget === "crazygames" ? "crazygames" : "none");
+      if (localQa) selectedSdk = "none";
+      var sdkUrl = window.__rackSdkUrl || "";
+      window.__rackPokiReady = safely(selectedSdk === "poki" ? loadSdk(
+        sdkUrl, "PokiSDK",
+        function (sdk) { return sdk.init(); }
+      ) : false);
+      window.__rackCrazyGamesReady = safely(selectedSdk === "crazygames" ? loadSdk(
+        sdkUrl, "CrazyGames",
+        function (sdk) {
+          return sdk.SDK.init().then(function () {
+            var game = sdk.SDK.game;
+            function applySettings(settings) { window.__rackPortalMuted = !!(settings && settings.muteAudio); }
+            if (game.settings) applySettings(game.settings);
+            if (typeof game.addSettingsChangeListener === "function") game.addSettingsChangeListener(applySettings);
+          });
+        }
+      ) : false);
+      window.__rackGameReady = false;
+      window.__rackNotifyLoadingFinished = function () {
+        if (window.__rackGameReady && window.__rackPokiReady) {
+          window.__rackPokiReady.then(function (ok) {
+            if (ok && window.PokiSDK) window.PokiSDK.gameLoadingFinished();
+          });
+        }
+      };
+      window.addEventListener("keydown", function (event) {
+        if (["ArrowDown", "ArrowUp", " "].indexOf(event.key) !== -1) event.preventDefault();
+      });
+      window.addEventListener("wheel", function (event) { event.preventDefault(); }, { passive: false });
+    }());
+  </script>
+</head>
+<body>
+  <main id="game-frame" aria-label="Rack & Ruin game">
+    <canvas id="canvas" tabindex="0">Your browser does not support the canvas element.</canvas>
+    <div id="status">
+      <div id="gate">
+        <p class="kicker">A POOL ROGUELITE</p>
+        <h1>RACK &amp; RUIN</h1>
+        <div class="rule" aria-hidden="true"></div>
+        <p class="tagline">Every table is a tactical problem.<br>Every shot changes the route ahead.</p>
+        <button id="start-game" type="button">TAP TO PLAY</button>
+        <div id="progress" role="status" aria-live="polite"></div>
+        <p id="gate-error" class="load-error" hidden>The table could not be set up. Check your connection and try again.</p>
+        <p class="hint">Mouse · touch · controller &nbsp;·&nbsp; Sound on</p>
+      </div>
+    </div>
+  </main>
+  <div id="rotate" role="status" aria-live="polite">
+    <span aria-hidden="true"></span>
+    ROTATE YOUR DEVICE
+    <small>Rack &amp; Ruin plays in landscape. Turn your device to see the whole table.</small>
+  </div>
+  <script>document.body.classList.add("waiting");</script>
+  <script src="$GODOT_URL"></script>
+  <script>
+    const engine = new Engine($GODOT_CONFIG);
+    const status = document.getElementById("status");
+    const startButton = document.getElementById("start-game");
+    const progress = document.getElementById("progress");
+    const gateError = document.getElementById("gate-error");
+    let gameStarted = false;
+
+    function setProgress(current, total) {
+      if (total > 0 && current < total) progress.textContent = "LOADING " + Math.round(current / total * 100) + "%";
+      else if (total > 0) progress.textContent = "";
+    }
+
+    function startEngine() {
+      return engine.startGame({
+        canvas: document.getElementById("canvas"),
+        canvasResizePolicy: 2,
+        onProgress: setProgress
+      }).then(function () {
+        // The gate has done its job; hand the whole frame to the game.
+        status.textContent = "";
+        document.body.classList.remove("waiting");
+        document.body.classList.add("playing");
+        window.__rackGameReady = true;
+        if (window.__rackNotifyLoadingFinished) window.__rackNotifyLoadingFinished();
+      }).catch(function (error) {
+        // Keep the wordmark on screen: a bare browser error loses the session.
+        gameStarted = false;
+        startButton.disabled = false;
+        startButton.textContent = "RETRY";
+        progress.textContent = "";
+        gateError.hidden = false;
+        console.error(error);
+      });
+    }
+
+    function startGame() {
+      if (gameStarted) return;
+      gameStarted = true;
+      gateError.hidden = true;
+      startButton.disabled = true;
+      startButton.textContent = "SETTING THE TABLE…";
+      startEngine();
+    }
+    startButton.addEventListener("click", startGame);
+  </script>
+</body>
+</html>
